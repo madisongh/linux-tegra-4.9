@@ -1,7 +1,7 @@
 /*
  * GK20A Graphics FIFO (gr host)
  *
- * Copyright (c) 2011-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -3928,10 +3928,59 @@ bool gk20a_fifo_is_engine_busy(struct gk20a *g)
 	return false;
 }
 
-int gk20a_fifo_wait_engine_idle(struct gk20a *g)
+int gk20a_fifo_wait_engine_id_idle(struct gk20a *g, u32 engine_id)
 {
 	struct nvgpu_timeout timeout;
 	unsigned long delay = GR_IDLE_CHECK_DEFAULT;
+	int ret = -ETIMEDOUT;
+	u32 host_num_engines;
+	bool ctxsw_active, ctx_status_invalid, engine_busy;
+	u32 status;
+
+	nvgpu_log_fn(g, " ");
+
+	host_num_engines =
+		 nvgpu_get_litter_value(g, GPU_LIT_HOST_NUM_ENGINES);
+
+	if (engine_id >= host_num_engines) {
+		nvgpu_err(g, "Invalid engine ID");
+		return -EINVAL;
+	}
+
+	nvgpu_timeout_init(g, &timeout, gk20a_get_gr_idle_timeout(g),
+			   NVGPU_TIMER_CPU_TIMER);
+
+	do {
+		status = gk20a_readl(g, fifo_engine_status_r(engine_id));
+		ctxsw_active = status &
+			fifo_engine_status_ctxsw_in_progress_f();
+		ctx_status_invalid =
+			(fifo_engine_status_ctx_status_v(status) ==
+			 fifo_engine_status_ctx_status_invalid_v());
+		engine_busy = fifo_engine_status_engine_v(status);
+
+		if (ctx_status_invalid || (!engine_busy && !ctxsw_active)) {
+			nvgpu_log_fn(g, "done");
+			ret = 0;
+			break;
+		}
+
+		nvgpu_usleep_range(delay, delay * 2);
+		delay = min_t(unsigned long,
+				delay << 1, GR_IDLE_CHECK_MAX);
+	} while (!nvgpu_timeout_expired(&timeout));
+
+	if (ret) {
+		nvgpu_log_info(g, "cannot idle engine %u %x", engine_id, status);
+	}
+
+	nvgpu_log_fn(g, "done");
+
+	return ret;
+}
+
+int gk20a_fifo_wait_engine_idle(struct gk20a *g)
+{
 	int ret = -ETIMEDOUT;
 	u32 i, host_num_engines;
 
@@ -3940,24 +3989,9 @@ int gk20a_fifo_wait_engine_idle(struct gk20a *g)
 	host_num_engines =
 		 nvgpu_get_litter_value(g, GPU_LIT_HOST_NUM_ENGINES);
 
-	nvgpu_timeout_init(g, &timeout, gk20a_get_gr_idle_timeout(g),
-			   NVGPU_TIMER_CPU_TIMER);
-
 	for (i = 0; i < host_num_engines; i++) {
-		do {
-			u32 status = gk20a_readl(g, fifo_engine_status_r(i));
-			if (!fifo_engine_status_engine_v(status)) {
-				ret = 0;
-				break;
-			}
-
-			nvgpu_usleep_range(delay, delay * 2);
-			delay = min_t(unsigned long,
-					delay << 1, GR_IDLE_CHECK_MAX);
-		} while (!nvgpu_timeout_expired(&timeout));
-
-		if (ret) {
-			nvgpu_log_info(g, "cannot idle engine %u", i);
+		ret = gk20a_fifo_wait_engine_id_idle(g, i);
+		if (ret != 0) {
 			break;
 		}
 	}
@@ -4169,6 +4203,68 @@ void gk20a_debug_dump_all_channel_status_ramfc(struct gk20a *g,
 		}
 	}
 	nvgpu_kfree(g, ch_state);
+}
+
+int gk20a_fifo_wait_pbdma_idle(struct gk20a *g, u32 pbdma_id)
+{
+	struct nvgpu_timeout timeout;
+	unsigned long delay = GR_IDLE_CHECK_DEFAULT;
+	int ret = -ETIMEDOUT;
+	u64 pbdma_get, pbdma_put;
+	u32 gp_get, gp_put;
+	u32 host_num_pbdma;
+	u32 chan_status;
+	u32 status;
+
+	nvgpu_log_fn(g, " ");
+
+	host_num_pbdma = nvgpu_get_litter_value(g, GPU_LIT_HOST_NUM_PBDMA);
+
+	if (pbdma_id >= host_num_pbdma) {
+		nvgpu_err(g, "invalid pbdma id %u", pbdma_id);
+		return -EINVAL;
+	}
+
+	nvgpu_timeout_init(g, &timeout, gk20a_get_gr_idle_timeout(g),
+			   NVGPU_TIMER_CPU_TIMER);
+
+	do {
+		status = gk20a_readl(g, fifo_pbdma_status_r(pbdma_id));
+
+		chan_status = fifo_pbdma_status_chan_status_v(status);
+		if (!chan_status) {
+			ret = 0;
+			break;
+		}
+
+		pbdma_put = (u64)gk20a_readl(g, pbdma_put_r(pbdma_id)) +
+			((u64)gk20a_readl(g, pbdma_put_hi_r(pbdma_id)) << 32ULL);
+
+		pbdma_get = (u64)gk20a_readl(g, pbdma_get_r(pbdma_id)) +
+			((u64)gk20a_readl(g, pbdma_get_hi_r(pbdma_id)) << 32ULL);
+
+		gp_put = gk20a_readl(g, pbdma_gp_put_r(pbdma_id));
+		gp_get = gk20a_readl(g, pbdma_gp_get_r(pbdma_id));
+
+		if ((pbdma_get == pbdma_put) && (gp_get == gp_put)) {
+			ret = 0;
+			break;
+		}
+
+		nvgpu_usleep_range(delay, delay * 2);
+		delay = min_t(unsigned long,
+				delay << 1, GR_IDLE_CHECK_MAX);
+	} while (!nvgpu_timeout_expired(&timeout));
+
+	if (ret) {
+		nvgpu_log_info(g, "cannot idle pbdma %u status: %x "
+			"pbdma_get: %llx pbdma_put: %llx gp_get: %x gp_put: %x",
+			pbdma_id, status, pbdma_get, pbdma_put, gp_get, gp_put);
+	}
+
+	nvgpu_log_fn(g, "done");
+
+	return ret;
 }
 
 void gk20a_dump_pbdma_status(struct gk20a *g,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2021, NVIDIA Corporation.  All rights reserved.
+ * Copyright (c) 2011-2023, NVIDIA Corporation.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -61,6 +61,7 @@ struct gk20a_ctrl_priv {
 	struct {
 		struct vm_area_struct *vma;
 		bool vma_mapped;
+		bool is_nvgpu_handling_cpu_fault;
 	} usermode_vma;
 };
 
@@ -1995,9 +1996,66 @@ static void usermode_vma_close(struct vm_area_struct *vma)
 	nvgpu_mutex_release(&l->ctrl.privs_lock);
 }
 
+static int gk20a_handle_usermode_io_faults(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	unsigned long address = (unsigned long)vmf->virtual_address;
+	struct gk20a_ctrl_priv *priv = vma->vm_private_data;
+	struct gk20a *g = priv->g;
+	bool vma_mapped;
+	int ret;
+
+	/* is the address valid? */
+	if (address > vma->vm_end) {
+		return VM_FAULT_SIGBUS;
+	}
+
+	nvgpu_log_info(g, "Accessed by user! Going to sleep");
+
+	priv->usermode_vma.is_nvgpu_handling_cpu_fault = true;
+
+	/* Try to gain access to deterministic busy */
+	nvgpu_rwsem_down_read(&g->deterministic_busy);
+
+	nvgpu_log_info(g, "Accessed by user! Waking up from sleep");
+
+	/* At this point, if the vma_mapped is true, a GPU
+	 * reset has already progressed and its safe to resume
+	 * the thread here.
+	 */
+	vma_mapped = priv->usermode_vma.vma_mapped;
+	if (!vma_mapped) {
+		/*
+		 * This indicates that PTEs are not restored for access.
+		 * This path should ideally be not reached. If nvgpu
+		 * doesn't restore the mapping due to some error or if
+		 * userspace access the usermode region after unmapping
+		 * we will reach this path.
+		 * */
+		ret = VM_FAULT_SIGBUS;
+		nvgpu_err(g, "Mappings not restored");
+	} else {
+		/* This flag indicates that the handler has already
+		 * intalled the PTE and there is no need to set the
+		 * correspondong vmf->page entry.
+		 */
+		ret = VM_FAULT_NOPAGE;
+		nvgpu_log_info(g, "Mappings restored");
+	}
+
+	/* Safe to release the semaphore here */
+	nvgpu_rwsem_up_read(&g->deterministic_busy);
+
+	nvgpu_log_info(g, "Accessed by user! Returning");
+
+	priv->usermode_vma.is_nvgpu_handling_cpu_fault = false;
+
+	return ret;
+}
+
 struct vm_operations_struct usermode_vma_ops = {
 	/* no .open - we use VM_DONTCOPY and don't support fork */
 	.close = usermode_vma_close,
+	.fault = gk20a_handle_usermode_io_faults,
 };
 
 int gk20a_ctrl_dev_mmap(struct file *filp, struct vm_area_struct *vma)
@@ -2049,6 +2107,23 @@ int gk20a_ctrl_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 	return err;
 }
 
+static bool is_mm_vma_in_fault(struct gk20a *g, struct mm_struct *mm)
+{
+	struct nvgpu_os_linux *l = nvgpu_os_linux_from_gk20a(g);
+	struct gk20a_ctrl_priv *priv;
+	bool in_fault = false;
+
+	nvgpu_list_for_each_entry(priv, &l->ctrl.privs,
+			gk20a_ctrl_priv, list) {
+		if (priv->usermode_vma.is_nvgpu_handling_cpu_fault &&
+		    (priv->usermode_vma.vma->vm_mm == mm)) {
+			in_fault = true;
+		}
+	}
+
+	return in_fault;
+}
+
 static int alter_usermode_mapping(struct gk20a *g,
 		struct gk20a_ctrl_priv *priv,
 		bool poweroff)
@@ -2056,6 +2131,7 @@ static int alter_usermode_mapping(struct gk20a *g,
 	struct nvgpu_os_linux *l = nvgpu_os_linux_from_gk20a(g);
 	struct vm_area_struct *vma = priv->usermode_vma.vma;
 	bool vma_mapped = priv->usermode_vma.vma_mapped;
+	bool skip_mm_lock;
 	u64 addr;
 	int err = 0;
 
@@ -2076,12 +2152,22 @@ static int alter_usermode_mapping(struct gk20a *g,
 	}
 
 	/*
+	 * If nvgpu is in the unidle path it will need to grab the mm lock for
+	 * VMAs in alter_usermode_mappings. nvgpu will not be able to acquire
+	 * this lock for a VMA if access on it has faulted. We should skip
+	 * acquiring that lock.
+	 */
+	skip_mm_lock = is_mm_vma_in_fault(g, vma->vm_mm);
+
+	/*
 	 * We use trylock due to lock inversion: we need to acquire
 	 * mmap_lock while holding ctrl_privs_lock. usermode_vma_close
 	 * does it in reverse order. Trylock is a way to avoid deadlock.
 	 */
-	if (!down_write_trylock(&vma->vm_mm->mmap_sem)) {
-		return -EBUSY;
+	if (!skip_mm_lock) {
+		if (!down_write_trylock(&vma->vm_mm->mmap_sem)) {
+			return -EBUSY;
+		}
 	}
 
 	if (poweroff) {
@@ -2102,7 +2188,9 @@ static int alter_usermode_mapping(struct gk20a *g,
 		}
 	}
 
-	up_write(&vma->vm_mm->mmap_sem);
+	if (!skip_mm_lock) {
+		up_write(&vma->vm_mm->mmap_sem);
+	}
 
 	return err;
 }

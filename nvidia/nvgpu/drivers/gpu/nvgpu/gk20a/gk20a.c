@@ -1,7 +1,7 @@
 /*
  * GK20A Graphics
  *
- * Copyright (c) 2011-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -81,13 +81,6 @@ int gk20a_prepare_poweroff(struct gk20a *g)
 	int ret = 0;
 
 	nvgpu_log_fn(g, " ");
-
-	if (g->ops.fifo.channel_suspend) {
-		ret = g->ops.fifo.channel_suspend(g);
-		if (ret) {
-			return ret;
-		}
-	}
 
 	/* disable elpg before gr or fifo suspend */
 	if (g->ops.pmu.is_pmu_supported(g)) {

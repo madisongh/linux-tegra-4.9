@@ -1,7 +1,7 @@
 /*
  * GK20A Graphics
  *
- * Copyright (c) 2011-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -400,6 +400,40 @@ static int gk20a_lockout_registers(struct gk20a *g)
 	return 0;
 }
 
+static int gk20a_fifo_wait_engines_idle(struct gk20a *g)
+{
+	u32 engine_id_idx;
+	u32 active_engine_id = 0;
+	int ret;
+
+	nvgpu_log_fn(g, " ");
+
+	for (engine_id_idx = 0; engine_id_idx < g->fifo.num_engines; engine_id_idx++) {
+		active_engine_id = g->fifo.active_engines_list[engine_id_idx];
+
+		ret = gk20a_fifo_wait_pbdma_idle(g,
+			g->fifo.engine_info[active_engine_id].pbdma_id);
+		if (ret != 0) {
+			nvgpu_log_info(g, "failed to idle the pbdma");
+			ret = -EAGAIN;
+			goto done;
+		}
+
+		ret = gk20a_fifo_wait_engine_id_idle(g,
+			g->fifo.engine_info[active_engine_id].engine_id);
+		if (ret != 0) {
+			nvgpu_log_info(g, "failed to idle the engine");
+			ret = -EAGAIN;
+			goto done;
+		}
+	}
+
+done:
+	nvgpu_log_fn(g, "done");
+
+	return ret;
+}
+
 static int gk20a_pm_prepare_poweroff(struct device *dev)
 {
 	struct gk20a *g = get_gk20a(dev);
@@ -417,13 +451,13 @@ static int gk20a_pm_prepare_poweroff(struct device *dev)
 	if (!g->power_on)
 		goto done;
 
-	/* disable IRQs and wait for completion */
-	irqs_enabled = g->irqs_enabled;
-	if (irqs_enabled) {
-		disable_irq(g->irq_stall);
-		if (g->irq_stall != g->irq_nonstall)
-			disable_irq(g->irq_nonstall);
-		g->irqs_enabled = 0;
+	nvgpu_hide_usermode_for_poweroff(g);
+
+	ret = gk20a_fifo_wait_engines_idle(g);
+	if (ret) {
+		nvgpu_err(g, "failed to idle engines");
+		nvgpu_restore_usermode_for_poweron(g);
+		goto done;
 	}
 
 	gk20a_scale_suspend(dev);
@@ -432,9 +466,42 @@ static int gk20a_pm_prepare_poweroff(struct device *dev)
 	gk20a_cde_suspend(l);
 #endif
 
+	if (g->ops.fifo.channel_suspend) {
+		ret = g->ops.fifo.channel_suspend(g);
+		if (ret) {
+			nvgpu_err(g, "channel suspend failed");
+			gk20a_scale_resume(dev);
+			nvgpu_restore_usermode_for_poweron(g);
+			goto done;
+		}
+	}
+
+	/* disable IRQs and wait for completion */
+	irqs_enabled = g->irqs_enabled;
+	if (g->irqs_enabled) {
+		disable_irq(g->irq_stall);
+		if (g->irq_stall != g->irq_nonstall)
+			disable_irq(g->irq_nonstall);
+		g->irqs_enabled = 0;
+	}
+
 	ret = gk20a_prepare_poweroff(g);
-	if (ret)
-		goto error;
+	if (ret) {
+		nvgpu_err(g, "gk20a_prepare_poweroff failed %d", ret);
+
+		/* re-enabled IRQs if previously enabled */
+		if (irqs_enabled) {
+			enable_irq(g->irq_stall);
+			if (g->irq_stall != g->irq_nonstall) {
+				enable_irq(g->irq_nonstall);
+			}
+			g->irqs_enabled = 1;
+		}
+
+		gk20a_scale_resume(dev);
+		nvgpu_restore_usermode_for_poweron(g);
+		goto done;
+	}
 
 	/* Decrement platform power refcount */
 	if (platform->idle)
@@ -446,21 +513,6 @@ static int gk20a_pm_prepare_poweroff(struct device *dev)
 #ifdef CONFIG_NVGPU_SUPPORT_LINUX_ECC_ERROR_REPORTING
 	nvgpu_disable_ecc_reporting(g);
 #endif
-
-	nvgpu_hide_usermode_for_poweroff(g);
-	nvgpu_mutex_release(&g->power_lock);
-	return 0;
-
-error:
-	/* re-enabled IRQs if previously enabled */
-	if (irqs_enabled) {
-		enable_irq(g->irq_stall);
-		if (g->irq_stall != g->irq_nonstall)
-			enable_irq(g->irq_nonstall);
-		g->irqs_enabled = 1;
-	}
-
-	gk20a_scale_resume(dev);
 done:
 	nvgpu_mutex_release(&g->power_lock);
 

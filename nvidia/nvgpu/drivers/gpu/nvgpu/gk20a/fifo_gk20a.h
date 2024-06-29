@@ -1,7 +1,7 @@
 /*
  * GK20A graphics fifo (gr host)
  *
- * Copyright (c) 2011-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -278,6 +278,7 @@ int gk20a_fifo_tsg_unbind_channel(struct channel_gk20a *ch);
 
 void fifo_gk20a_finish_mmu_fault_handling(struct gk20a *g,
 		unsigned long fault_id);
+int gk20a_fifo_wait_engine_id_idle(struct gk20a *g, u32 engine_id);
 int gk20a_fifo_wait_engine_idle(struct gk20a *g);
 bool gk20a_fifo_is_engine_busy(struct gk20a *g);
 u32 gk20a_fifo_engine_interrupt_mask(struct gk20a *g);
@@ -369,6 +370,7 @@ void gk20a_dump_channel_status_ramfc(struct gk20a *g,
 				     struct ch_state *ch_state);
 void gk20a_debug_dump_all_channel_status_ramfc(struct gk20a *g,
 		 struct gk20a_debug_output *o);
+int gk20a_fifo_wait_pbdma_idle(struct gk20a *g, u32 pbdma_id);
 void gk20a_dump_pbdma_status(struct gk20a *g,
 				 struct gk20a_debug_output *o);
 void gk20a_dump_eng_status(struct gk20a *g,

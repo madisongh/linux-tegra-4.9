@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2017-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -622,7 +622,7 @@ struct nvgpu_kmem_cache *nvgpu_kmem_cache_create(struct gk20a *g, size_t size)
 	cache->g = g;
 
 	snprintf(cache->name, sizeof(cache->name),
-		 "nvgpu-cache-0x%p-%d-%d", g, (int)size,
+		 "nvgpu-cache-0x%px-%d-%d", g, (int)size,
 		 atomic_inc_return(&kmem_cache_id));
 	cache->cache = kmem_cache_create(cache->name,
 					 size, size, 0, NULL);
