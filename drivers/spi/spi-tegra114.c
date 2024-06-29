@@ -1,7 +1,7 @@
 /*
  * SPI driver for NVIDIA's Tegra114 SPI Controller.
  *
- * Copyright (c) 2013-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -968,7 +968,7 @@ static void set_best_clk_source(struct tegra_spi_data *tspi,
 	unsigned long err_rate, crate, prate;
 	unsigned int cdiv, fin_err = rate;
 	int ret;
-	struct clk *pclk, *fpclk = NULL;
+	struct clk *pclk = NULL, *fpclk = NULL;
 	const char *pclk_name, *fpclk_name = NULL;
 	struct device_node *node;
 	struct property *prop;
@@ -991,6 +991,7 @@ static void set_best_clk_source(struct tegra_spi_data *tspi,
 			cdiv = DIV_ROUND_UP(prate, crate);
 			if (cdiv > tspi->min_div)
 				tspi->min_div = cdiv;
+			clk_put(pclk);
 		}
 	}
 
@@ -1024,13 +1025,15 @@ static void set_best_clk_source(struct tegra_spi_data *tspi,
 			fpclk = pclk;
 			fin_err = err_rate;
 			fpclk_name = pclk_name;
-		}
+		} else
+			clk_put(pclk);
 	}
 
 	if (fpclk) {
 		dev_dbg(tspi->dev, "Setting clk_src %s\n",
 			fpclk_name);
 		clk_set_parent(tspi->clk, fpclk);
+		clk_put(fpclk);
 	}
 }
 
@@ -1941,7 +1944,7 @@ static int tegra_spi_probe(struct platform_device *pdev)
 	int ret, spi_irq;
 	int bus_num;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(*tspi));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(*tspi));
 	if (!master) {
 		dev_err(&pdev->dev, "master allocation failed\n");
 		return -ENOMEM;

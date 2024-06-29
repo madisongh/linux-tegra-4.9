@@ -7132,6 +7132,8 @@ out:
 		hba->uic_link_state, hba->curr_dev_pwr_mode);
 	if (!ret)
 		hba->is_sys_suspended = true;
+
+	pm_runtime_disable(hba->dev);
 	return ret;
 }
 EXPORT_SYMBOL(ufshcd_system_suspend);

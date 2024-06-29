@@ -355,6 +355,10 @@ int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 	if (err)
 		return err;
 
+	if (!kuid_has_mapping(current_user_ns(), pstat.uid) ||
+	    !kgid_has_mapping(current_user_ns(), pstat.gid))
+		return -EOVERFLOW;
+
 	if (S_ISLNK(stat->mode)) {
 		link = vfs_get_link(lowerdentry, &done);
 		if (IS_ERR(link))
