@@ -464,6 +464,7 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
 	struct tegra_channel_buffer *buf)
 {
 	int err = 0;
+	bool frame_err = false;
 	int vi_port = 0;
 	int gang_prev_frame_id = 0;
 	unsigned long flags;
@@ -501,15 +502,14 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
 					"err_data %d\n",
 					descr->status.frame_id, descr->status.flags,
 					descr->status.err_data);
-				buf->vb2_state = VB2_BUF_STATE_REQUEUEING;
-				goto done;
+				frame_err = true;
 			}
 		} else if (!vi_port) {
 			gang_prev_frame_id = descr->status.frame_id;
 		} else if (descr->status.frame_id != gang_prev_frame_id) {
-			dev_err(vi->dev, "frame_id out of sync: ch2 %d vs ch1 %d\n",
+			dev_warn(vi->dev, "frame_id out of sync: ch2 %d vs ch1 %d\n",
 					gang_prev_frame_id, descr->status.frame_id);
-			goto uncorr_err;
+			frame_err = true;
 		}
 
 		spin_lock_irqsave(&chan->capture_state_lock, flags);
@@ -532,12 +532,18 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
 	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
 #endif
 
-	buf->vb2_state = VB2_BUF_STATE_DONE;
+	if (frame_err)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+		buf->vb2_state = VB2_BUF_STATE_REQUEUEING;
+#else
+		buf->vb2_state = VB2_BUF_STATE_ERROR;
+#endif
+	else
+		buf->vb2_state = VB2_BUF_STATE_DONE;
 	/* Read EOF from capture descriptor */
 	ts = ns_to_timespec((s64)descr->status.eof_timestamp);
 	trace_tegra_channel_capture_frame("eof", ts);
 
-done:
 	goto rel_buf;
 
 uncorr_err:

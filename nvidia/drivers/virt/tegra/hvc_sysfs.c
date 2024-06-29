@@ -1,7 +1,7 @@
 /*
  * drivers/virt/tegra/hvc_sysfs.c
  *
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2023, NVIDIA CORPORATION. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -263,7 +263,7 @@ static int __init hvc_sysfs_register_nvlog_reader(struct kobject *kobj,
 	nvlog_reader_info.num_vms = (uint32_t)vms;
 
 	if (index < ATTRS_MAX) {
-		hyp_shared_memory_attrs[index].mode = 0444;
+		hyp_shared_memory_attrs[index].mode = 0664;
 		hyp_shared_memory_attrs[index].ipa = ipa;
 		hyp_shared_memory_attrs[index].size = size;
 		hyp_shared_memory_attrs[index].node_name = "nvlog_reader";

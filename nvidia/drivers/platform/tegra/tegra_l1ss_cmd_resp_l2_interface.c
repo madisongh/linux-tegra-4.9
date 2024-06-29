@@ -1,17 +1,14 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES.
+ * All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
  */
 
 #include "tegra_l1ss.h"
@@ -170,7 +167,7 @@ int user_send_service_status_notification(const nv_guard_srv_status_t *Var1,
 						 10 * HZ);
 	if (timeout <= 0) {
 		PDEBUG("Done ..but timeout ... wait for register notify\n");
-		return -1;
+		return -ETIMEDOUT;
 	}
 	PDEBUG("%s(%d) Done ..wait for register notify\n", __func__, __LINE__);
 
@@ -213,7 +210,7 @@ int user_send_phase_notify(struct l1ss_data *ldata, nv_guard_3lss_layer_t layer,
 						 10 * HZ);
 	if (timeout <= 0) {
 		PDEBUG("Done ..but timeout ... wait for register notify\n");
-		return -1;
+		return -ETIMEDOUT;
 	}
 
 	cmd_resp_update_header(&send_phase.header, CMDRESPL1_CLASS1,

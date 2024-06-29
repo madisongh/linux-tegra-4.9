@@ -1,7 +1,7 @@
 /*
  * hdmihdcp.c: hdmi hdcp functions.
  *
- * Copyright (c) 2014-2022, NVIDIA CORPORATION, All rights reserved.
+ * Copyright (c) 2014-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -31,6 +31,7 @@
 
 #include <soc/tegra/kfuse.h>
 #include <soc/tegra/fuse.h>
+#include <soc/tegra/chip-id.h>
 #include <linux/trusty/trusty_ipc.h>
 #include <linux/ote_protocol.h>
 
@@ -853,7 +854,7 @@ static int get_srm_signature(struct hdcp_context_t *hdcp_context,
 static int verify_link(struct tegra_nvhdcp *nvhdcp, bool wait_ri)
 {
 	struct tegra_hdmi *hdmi = nvhdcp->hdmi;
-	int retries = 3;
+	int retries = 3, ri_zero_retries = 3;
 	u16 old, rx, tx;
 	int e;
 
@@ -868,10 +869,13 @@ static int verify_link(struct tegra_nvhdcp *nvhdcp, bool wait_ri)
 		e = get_receiver_ri(nvhdcp, &rx);
 		if (!e) {
 			if (!rx) {
-				nvhdcp_err("Ri is 0!\n");
-				return -EINVAL;
+				nvhdcp_err("sor%u verify_link Ri is 0!\n",
+						hdmi->sor->ctrl_num);
+				if (!wait_ri || !--ri_zero_retries)
+					return -EINVAL;
+				msleep(50);
+				continue;
 			}
-
 			tx = get_transmitter_ri(hdmi);
 		} else {
 			rx = ~tx;
@@ -890,8 +894,11 @@ static int verify_link(struct tegra_nvhdcp *nvhdcp, bool wait_ri)
 	}
 	mutex_unlock(&nvhdcp->lock);
 
-	if (rx != tx)
+	if (rx != tx) {
+		nvhdcp_err("sor%u verify_link:rx=0x%04x tx=0x%04x\n",
+				hdmi->sor->ctrl_num, rx, tx);
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1567,7 +1574,6 @@ static void nvhdcp1_downstream_worker(struct work_struct *work)
 			goto failure;
 		}
 	}
-
 
 	nvhdcp_vdbg("%s():started thread %s for sor: %x\n", __func__,
 			nvhdcp->name, nvhdcp->hdmi->sor->ctrl_num);
@@ -2406,17 +2412,23 @@ static int nvhdcp_dev_open(struct inode *inode, struct file *filp)
 #ifndef CONFIG_TEGRA_ANDROID
 	int err = 0;
 #endif
+
 	filp->private_data = nvhdcp;
 
-/* enable policy only if HDCP TA is ready */
 #ifndef CONFIG_TEGRA_ANDROID
 	if (!nvhdcp->policy_initialized) {
 		nvhdcp->policy_initialized = true;
-		err = nvhdcp_te_open(nvhdcp);
+		/* enable policy only if HDCP TA is ready
+		 * but it doesn't check (if HDCP TA is ready) for VM case
+		 * which can enable HDCP when boot up.
+		 */
+		if (!is_tegra_hypervisor_mode())
+			err = nvhdcp_te_open(nvhdcp);
 		if (!err)
 			tegra_nvhdcp_set_policy(nvhdcp,
 				TEGRA_DC_HDCP_POLICY_ALWAYS_ON);
-		nvhdcp_te_close(nvhdcp);
+		if (!is_tegra_hypervisor_mode())
+			nvhdcp_te_close(nvhdcp);
 	}
 #endif
 	return 0;

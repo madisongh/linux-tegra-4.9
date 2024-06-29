@@ -1,15 +1,14 @@
 /*
- * Copyright (c) 2016-2021, NVIDIA CORPORATION, All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES.
+ * All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
  */
 
 #include <linux/kernel.h>
@@ -359,14 +358,23 @@ static int tegra_safety_ivc_probe(struct platform_device *pdev)
 	dev_info(dev, "Probing sce safety driver\n");
 
 	safety_ivc = devm_kzalloc(dev, sizeof(*safety_ivc), GFP_KERNEL);
-	if (!safety_ivc)
-		return -ENOMEM;
+	if (!safety_ivc) {
+		dev_err(dev, "failed to allocate safety_ivc\n");
+		ret = -ENOMEM;
+		goto err_nomem;
+	}
 
 	dev_set_drvdata(dev, safety_ivc);
 
 	init_waitqueue_head(&safety_ivc->cmd.response_waitq);
 	init_waitqueue_head(&safety_ivc->cmd.empty_waitq);
 	safety_ivc->wq = alloc_workqueue("safety_cmdresp", WQ_HIGHPRI, 0);
+	if (safety_ivc->wq == NULL) {
+		dev_err(dev, "failed to allocate safety_cmdresp workqueue\n");
+		ret = -ENOMEM;
+		goto err_nomem;
+	}
+
 	INIT_WORK(&safety_ivc->work, tegra_safety_cmdresp_work_func);
 	mutex_init(&safety_ivc->rlock);
 	mutex_init(&safety_ivc->wlock);
@@ -374,31 +382,31 @@ static int tegra_safety_ivc_probe(struct platform_device *pdev)
 	ret = tegra_safety_ivc_parse_hsp(dev);
 	if (ret) {
 		dev_err(dev, "failed to get hsp: %d\n", ret);
-		goto fail;
+		goto free_workqurue;
 	}
 
 	ret = tegra_safety_ivc_parse_ast_region(dev);
 	if (ret) {
 		dev_err(dev, "failed to get ast region: %d\n", ret);
-		goto fail;
+		goto free_hsp;
 	}
 
 	ret = tegra_safety_ivc_parse_channel(dev);
 	if (ret) {
 		dev_err(dev, "failed to get ivc channel info: %d\n", ret);
-		goto fail;
+		goto free_ast;
 	}
 
 	ret = l1ss_init(safety_ivc);
 	if (ret) {
 		dev_err(dev, "failed to setup l1ss: %d\n", ret);
-		goto fail;
+		goto free_ast;
 	}
 	/* inform sce that IVC setup is complete */
 	ret = tegra_safety_ivc_setup_ready(dev);
 	if (ret) {
 		dev_err(dev, "failed to setup ivc: %d\n", ret);
-		goto fail;
+		goto free_l1ss;
 	}
 
 	/* create user space safety cdevs */
@@ -406,7 +414,7 @@ static int tegra_safety_ivc_probe(struct platform_device *pdev)
 		ret = tegra_safety_dev_init(dev, i);
 		if (ret) {
 			dev_err(dev, "failed to setup cdev %d\n", ret);
-			goto fail;
+			goto free_l1ss;
 		}
 	}
 
@@ -415,14 +423,30 @@ static int tegra_safety_ivc_probe(struct platform_device *pdev)
 	ret = l1ss_submit_rq(&req, false);
 	if (ret) {
 		dev_err(dev, "failed to submit phase init done: %d\n", ret);
-		goto fail;
+		goto free_dev;
 	}
 	dev_info(dev, "Successfully probed safety ivc driver\n");
 
 	return 0;
 
-fail:
-	tegra_safety_ivc_remove(pdev);
+free_dev:
+	for (i = 0; i < ivc_chan_count; i++)
+		tegra_safety_dev_exit(dev, i);
+
+free_l1ss:
+	l1ss_exit(safety_ivc);
+
+free_ast:
+	tegra_safety_ast_region_free(dev);
+
+free_hsp:
+	tegra_hsp_sm_pair_free(safety_ivc->ivc_pair);
+	ivc_chan_count = 0;
+
+free_workqurue:
+	destroy_workqueue(safety_ivc->wq);
+
+err_nomem:
 	return ret;
 }
 

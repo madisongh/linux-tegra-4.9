@@ -4558,6 +4558,9 @@ static int tegra_pcie_dw_runtime_suspend(struct device *dev)
 	if (pcie->cid != CTRL_5)
 		uphy_bpmp_pcie_controller_state_set(pcie->cid, false);
 
+	if (tegra_bwmgr_set_emc(pcie->emc_bw, 0, TEGRA_BWMGR_SET_EMC_FLOOR))
+		dev_err(pcie->dev, "can't set emc clock 0\n");
+
 	return 0;
 }
 

@@ -824,6 +824,11 @@ int vi_capture_release(struct tegra_vi_channel *chan,
 		return -ENODEV;
 	}
 
+	/* Wait for workqueue chan->linetimer_work to complete */
+	if (cancel_work_sync(&chan->linetimer_work)) {
+		dev_err(chan->dev, "%s: linetimer_work is pending\n", __func__);
+	}
+
 	memset(&control_desc, 0, sizeof(control_desc));
 	control_desc.header.msg_id = CAPTURE_CHANNEL_RELEASE_REQ;
 	control_desc.header.channel_id = capture->channel_id;

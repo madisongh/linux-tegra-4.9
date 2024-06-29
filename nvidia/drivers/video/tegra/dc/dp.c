@@ -2874,19 +2874,6 @@ static void tegra_dc_dp_enable(struct tegra_dc *dc)
 	if (tegra_platform_is_fpga())
 		tegra_sor_program_fpga_clk_mux(sor);
 
-	/* Change for seamless */
-	if (!dc->initialized) {
-		ret = tegra_dp_panel_power_state(dp,
-					NV_DPCD_SET_POWER_VAL_D0_NORMAL);
-		if (ret < 0) {
-			dev_err(&dp->dc->ndev->dev,
-			"dp: failed to exit panel power save mode (0x%x)\n",
-			ret);
-			tegra_dc_io_end(dp->dc);
-			return;
-		}
-	}
-
 	/* For eDP, driver gets to decide the best mode. */
 	if (!tegra_dc_is_ext_panel(dc) &&
 		dc->out->type != TEGRA_DC_OUT_FAKE_DP) {
@@ -2904,6 +2891,24 @@ static void tegra_dc_dp_enable(struct tegra_dc *dc)
 				"edp: plug hpd wait timeout\n");
 			return;
 		}
+	}
+
+	/* Change for seamless */
+	if (!dc->initialized) {
+		ret = tegra_dp_panel_power_state(dp,
+					NV_DPCD_SET_POWER_VAL_D0_NORMAL);
+		if (ret < 0) {
+			dev_err(&dp->dc->ndev->dev,
+			"dp: failed to exit panel power save mode (0x%x)\n",
+			ret);
+			tegra_dc_io_end(dp->dc);
+			return;
+		}
+	}
+
+	if (!tegra_dc_is_ext_panel(dc) &&
+		dc->out->type != TEGRA_DC_OUT_FAKE_DP) {
+		int err;
 
 		err = tegra_edp_edid_read(dp);
 		if (err < 0)

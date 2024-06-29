@@ -1,7 +1,7 @@
 /*
  * Deskew driver
  *
- * Copyright (c) 2014-2019, NVIDIA Corporation.  All rights reserved.
+ * Copyright (c) 2014-2023, NVIDIA Corporation.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -619,7 +619,7 @@ static void compute_trimmer(unsigned int *x, unsigned int *w,
 			x[i] = 0;
 			w[i] = 0;
 		}
-		mid[i] = ((y[i] + z[i]) - (x[i] + w[i])) >> 1;
+	mid[i] = ((long)(y[i] + z[i]) - (long)(x[i] + w[i])) / 2;
 		base = mid[i] < base ? mid[i] : base;
 	}
 	*c = -base;

@@ -1,17 +1,14 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES.
+ * All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
  */
 
 #include <linux/init.h>
@@ -164,10 +161,20 @@ int l1ss_init(struct tegra_safety_ivc *safety_ivc)
 	int err;
 
 	ldata = kmalloc(sizeof(struct l1ss_data), GFP_KERNEL);
-	if (ldata == NULL)
-		return -1;
+	if (ldata == NULL) {
+		pr_err("L1SS : failed to allocate l1ss\n");
+		err = -ENOMEM;
+		goto err_nomem;
+	}
+
 	spin_lock_init(&ldata->slock);
 	ldata->wq = alloc_workqueue("l1ss", WQ_HIGHPRI, 0);
+	if (ldata->wq == NULL) {
+		pr_err("L1SS : failed to allocate l1ss workqueue\n");
+		err = -ENOMEM;
+		goto err_workqueue;
+	}
+
 	ldata->head = NULL;
 	INIT_WORK(&ldata->work, l1ss_workqueue_function);
 	init_waitqueue_head(&ldata->cmd.notify_waitq);
@@ -176,10 +183,19 @@ int l1ss_init(struct tegra_safety_ivc *safety_ivc)
 	ldata->cmd_resp_lookup_table = cmd_resp_lookup_table;
 
 	err = alloc_chrdev_region(&ldata->dev, 0, MAX_DEV, "l1ss");
+	if (err) {
+		pr_err("L1SS : failed to allocate l1ss char dev\n");
+		goto err_chrdev;
+	}
 
 	ldata->dev_major = MAJOR(ldata->dev);
 
 	ldata->l1ss_class = class_create(THIS_MODULE, "l1ss");
+	if (IS_ERR(ldata->l1ss_class)) {
+		err = PTR_ERR(ldata->l1ss_class);
+		goto err_create_class;
+	}
+
 	ldata->l1ss_class->dev_uevent = l1ss_uevent;
 
 	cdev_init(&ldata->cdev, &l1ss_fops);
@@ -194,6 +210,18 @@ int l1ss_init(struct tegra_safety_ivc *safety_ivc)
 	safety_ivc->ldata = ldata;
 
 	return 0;
+
+err_create_class:
+	unregister_chrdev_region(ldata->dev, MAX_DEV);
+
+err_chrdev:
+	destroy_workqueue(ldata->wq);
+
+err_workqueue:
+	kfree(ldata);
+
+err_nomem:
+	return err;
 }
 
 int l1ss_exit(struct tegra_safety_ivc *safety_ivc)
@@ -230,7 +258,7 @@ static int l1ss_open(struct inode *inode, struct file *file)
 	file->private_data = ldata;
 
 	if (ldata == NULL)
-		return -1;
+		return -EFAULT;
 
 	return 0;
 }
@@ -245,6 +273,7 @@ static int l1ss_release(struct inode *inode, struct file *file)
 		dev_major = ldata->dev_major;
 	} else {
 		PDEBUG("ldata is NULL\n");
+		return -EFAULT;
 	}
 
 	return 0;
@@ -542,7 +571,7 @@ static long l1ss_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		req = kmalloc(sizeof(nv_guard_request_t), GFP_KERNEL);
 		if (req == NULL) {
 			pr_err("Failed to allocate memory");
-			return -1;
+			return -ENOMEM;
 		}
 		if (copy_from_user(req, (nv_guard_request_t *)arg,
 				   sizeof(nv_guard_request_t))) {
@@ -573,7 +602,7 @@ int l1ss_submit_rq(nv_guard_request_t *req, bool can_sleep)
 		n = kmalloc(sizeof(struct l1ss_req_node), GFP_ATOMIC);
 	if (n == NULL) {
 		pr_err("Failed to allocate memory");
-		return -1;
+		return -ENOMEM;
 	}
 	n->next = NULL;
 	if (can_sleep)
@@ -583,7 +612,7 @@ int l1ss_submit_rq(nv_guard_request_t *req, bool can_sleep)
 	if (n->req == NULL) {
 		pr_err("Failed to allocate memory");
 		kfree(n);
-		return -1;
+		return -ENOMEM;
 	}
 	memcpy(n->req, req, sizeof(nv_guard_request_t));
 
